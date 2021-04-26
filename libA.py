@@ -16,10 +16,10 @@ import datetime
 import unidecode
 import warnings
 from workalendar.america import Brazil
-import openpyxl
 import calendar
 from collections import OrderedDict
 import shutil
+import locale
 import glob
 import time
 import json
@@ -27,8 +27,11 @@ import pywinauto
 import pytesseract
 import pyautogui
 import autoit
+import cv2 as cv
+import numpy as np
 from PIL import Image, ImageFilter
 import pandas as pd
+import pandas.io.formats.excel
 import tkinter
 import pyperclip
 import json
@@ -114,6 +117,26 @@ def text_normalizer(*, text, only_normal_digits=False, lower=False, upper=False,
     if remove_spaces:
         textNormalized = textNormalized.replace(' ', '')
     return textNormalized
+
+
+def currency_formatter(*, value):
+    """
+    Var Resolve
+
+    Objective:
+        Transform whole numbers or float into versions formatted with Symbol (R $) and separated into groups according to the Brazilian currency format
+    return in success:
+        Currency formatted
+    return in error:
+        Value received is not a int or float
+    """
+
+    if type(value) != int and type(value) != float:
+        return -1
+    
+    locale.setlocale(locale.LC_ALL, 'pt_BR')
+    currency_formatted = locale.currency(value, grouping=True)
+    return currency_formatted
 
 
 def var_resolve(var):
@@ -437,7 +460,7 @@ def get_json_from_csv(
     return csv_builded
 
 
-def get_xlsx_from_json(*, json, xls_name='default', mark_column_name=False, mark_column_number=False, special_columns=False):
+def get_xlsx_from_json(*, json, xls_name='default.xlsx', sheet_name='main', create_special_column=False, overwrite=False):
     """
     Get XLS From Json
 
@@ -446,88 +469,80 @@ def get_xlsx_from_json(*, json, xls_name='default', mark_column_name=False, mark
     return in success:
         return name file as success
     return in error:
+        -1, this file cant overwrite
         raise Exception, because the path is not valid or not is find
     """
 
-    wb = openpyxl.Workbook() # Create a new workbook
-    ws = wb.active # Call the Worksheet of the workbook
+    # If overwrite is False, Check if alread exists file with this xls_name
+    if not overwrite and os.path.isfile(xls_name):
+        return -1
 
-    # Creating a special column
-    if special_columns:
-        if type(special_columns) == list:
-            for idxRow, row in enumerate(json):
-                for special_column in special_columns:
-                    row[special_column] = ''
-                    json[idxRow] = row # add
-        elif type(special_columns) == str:
-            for idxRow, row in enumerate(json):
-                row[special_columns] = ''
-                json[idxRow] = row # add
-    
-    for i in range(len(json)):
-        sub_obj = json[i]
-        if i == 0 :
-            keys = list(sub_obj.keys())
-            for k in range(len(keys)):
-                # Add the Items title
-                row_number = i + 1 # Row number
-                column_number = k + 1 # Column number
-                ws.row_dimensions[row_number].height = 25
-                title = ws.cell(row = row_number, column = column_number)
-                title.value = keys[k] # Set the title
-                title.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center') # add alignment style
+    # Transform json (dict) in Dataframe
+    df = pd.DataFrame(json) 
 
-                # If this is a special column for apply different style
-                if (mark_column_name and (str(keys[k]) == str(mark_column_name))) or (mark_column_number and k == mark_column_number):
-                    title.font = openpyxl.styles.Font(bold=True, size=13, color='000000') # Apply font style
-                    title.fill = openpyxl.styles.fills.PatternFill(patternType='solid', fgColor=openpyxl.styles.colors.Color('E13C3C')) # Apply fill color
-                else:
-                    title.font = openpyxl.styles.Font(bold=True, size=12, color='000000') # Apply font style
-                    title.fill = openpyxl.styles.fills.PatternFill(patternType='solid', fgColor=openpyxl.styles.colors.Color('B1B1B1')) # Apply fill color
-                
-                # Insere border
-                title.border = openpyxl.styles.borders.Border(
-                    left=openpyxl.styles.borders.Side(style='thin'), 
-                    right=openpyxl.styles.borders.Side(style='thin'), 
-                    top=openpyxl.styles.borders.Side(style='thin'), 
-                    bottom=openpyxl.styles.borders.Side(style='thin')
-                )
-        for j in range(len(keys)):
-            # Add the Items
-            row_number = i + 2 # Row number
-            column_number = j + 1 # Column number
-            ws.row_dimensions[row_number].height = 25
-            item = ws.cell(row = row_number, column = column_number)
-            try:
-                item.value = sub_obj[str(keys[j])]
-            except KeyError:
-                item.value = ''
-            item.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center')
+    # If create_special_column exists, create empty column with 'create_special_column' value
+    if create_special_column and type(create_special_column) == str:
+        df[str(create_special_column)] = pd.Series(dtype=str)
 
-            # If this is a special column for apply different style
-            if (mark_column_name and (str(keys[j]) == str(mark_column_name))) or (mark_column_number and j == mark_column_number):
-                item.font = openpyxl.styles.Font(bold=False, size=11, color='000000') # Apply font style
-                item.fill = openpyxl.styles.fills.PatternFill(patternType='solid', fgColor=openpyxl.styles.colors.Color('E5B7B6')) # Apply fill color
-            else:
-                item.font = openpyxl.styles.Font(bold=False, size=10, color='000000') # Apply font style
-                item.fill = openpyxl.styles.fills.PatternFill(patternType='solid', fgColor=openpyxl.styles.colors.Color('E9E7E6')) # Apply fill color
-            
-            # Insere border
-            item.border = openpyxl.styles.borders.Border(
-                left=openpyxl.styles.borders.Side(style='dashDot'), 
-                right=openpyxl.styles.borders.Side(style='dashDot'), 
-                top=openpyxl.styles.borders.Side(style='thin'), 
-                bottom=openpyxl.styles.borders.Side(style='thin')
-            )
-    
-    # Adding automatic column width
-    for column_cells in ws.columns:
-        gap_size = 10
-        length = max(len(str(cell.value)) for cell in column_cells)
-        
-        ws.column_dimensions[column_cells[0].column_letter].width = length + gap_size
-    # Save xlsx
-    wb.save(f'{xls_name}.xlsx')
+    # Change default style of pandas header
+    pandas.io.formats.excel.ExcelFormatter.header_style = pandas.io.formats.excel.ExcelFormatter.header_style = {
+        "font": {"bold": True, "color": '#f1faee'},
+        "borders": {
+            "top": "thin",
+            "right": "thin",
+            "bottom": "thin",
+            "left": "thin",
+        },
+        "alignment": {"horizontal": "center", "vertical": "vcenter"},
+        "fill": {"fgColor": "#1d3557", "patternType": "solid"}
+    }
+
+    # Initialize excelWriter in pandas, with xlsxwriter lib
+    writer = pd.ExcelWriter(xls_name, engine="xlsxwriter")
+    wb = writer.book
+
+    # Transform Dataframe to excel, remove index and transform all NaN values as null
+    df.to_excel(writer, sheet_name=sheet_name, index=False, na_rep='')
+
+    # Define Basic cell style
+    basic_cell = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1})
+
+    # Define basic stripped cell style
+    stripped_basic_cell = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#f1faee'})
+
+    # Define warning cell style, its is used in specials columns
+    warning_cell = wb.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#e7a4aa'})
+
+    # Loop in all columns in Dataframe for set column styles
+    for column in df:
+        # Get max length of chars in current column
+        column_length = max(df[column].astype(str).map(len).max(), len(column))
+
+        # Get idx of current column name
+        col_idx = df.columns.get_loc(column)
+
+        # Set column width
+        writer.sheets[sheet_name].set_column(col_idx, col_idx, column_length + 10)
+
+        # If create_special_column exists, create a conditional formatting for NaN values in this column
+        if (create_special_column and type(create_special_column) == str) and column == create_special_column:
+            writer.sheets[sheet_name].conditional_format(1, col_idx, len(df), col_idx, {
+                'type': 'cell',
+                'criteria': 'equal to',
+                'value': '""',
+                'format': warning_cell
+            })
+
+    # Loop in all rows in Dataframe for set row styles
+    for row in range(0, len(df)+1, 2):
+        # Define stripped style, and set this row height
+        writer.sheets[sheet_name].set_row(row, 25, stripped_basic_cell)
+
+        # Define stripped style, and set this row height
+        writer.sheets[sheet_name].set_row(row+1, 25, basic_cell)
+
+    # Save excel
+    writer.save()
 
     # Return name of the xlsx
     return xls_name
@@ -589,8 +604,6 @@ class AutomaticGui:
 
     def __init__(self):
         self.app = pywinauto.Application() # This is only visual
-        self.win32_app = pywinauto.Application() # This is only visual
-        self.allow_exception = False
 
 
     def start_app(self, app):
@@ -606,14 +619,10 @@ class AutomaticGui:
         def run(self):
             try:
                 app = pywinauto.Application('uia').connect(**self.connect_app_parameters)
-                win32_app = pywinauto.Application('win32').connect(**self.connect_app_parameters)
                 self.automaticGui_props.app = app
-                self.automaticGui_props.win32_app = win32_app
             except pywinauto.findwindows.ElementAmbiguousError:
                 app = pywinauto.Application('uia').connect(**self.connect_app_parameters, found_index = 0)
-                win32_app = pywinauto.Application('win32').connect(**self.connect_app_parameters, found_index = 0)
                 self.automaticGui_props.app = app
-                self.automaticGui_props.win32_app = win32_app
         def wait_ready(self, *, timeout=False):
             self.automaticGui_props.wait_window(window=lambda: self.run(), timeout=timeout)
         def wait_first(self, *, timeout=False):
@@ -668,10 +677,10 @@ class AutomaticGui:
             def __init__(self, *, automaticGui_props, kwargs):
                 self.automaticGui_props = automaticGui_props
                 self.connect_app_parameters = kwargs
-            def run(self, *, x=5, y=5):
-                self.automaticGui_props.app.top_window().window(**self.connect_app_parameters).click_input(coords=(x, y))
-            def wait_ready(self, *, timeout=False, x=5, y=5):
-                self.automaticGui_props.wait_window(window=lambda: self.run(x=x, y=y), timeout=timeout)
+            def run(self, *, x=5, y=5, button='left'):
+                self.automaticGui_props.app.top_window().window(**self.connect_app_parameters).click_input(button=button, coords=(x, y))
+            def wait_ready(self, *, timeout=False, x=5, y=5, button='left'):
+                self.automaticGui_props.wait_window(window=lambda: self.run(x=x, y=y, button=button), timeout=timeout)
         class GetText:
             def __init__(self, *, automaticGui_props, kwargs):
                 self.automaticGui_props = automaticGui_props
@@ -728,20 +737,20 @@ class AutomaticGui:
                 self.image_path = image_path
                 self.confidence = confidence
                 self.in_app = in_app
-            def run(self, *, x=0, y=0):
+            def run(self, *, x=0, y=0, button='left'):
                 imageCoords = self.automaticGui_props.get_image_position(image_path=self.image_path, confidence=self.confidence, in_app=self.in_app)
                 if imageCoords != None:
                     px, py = imageCoords
                     px = px+x
                     py = py+y
-                    pyautogui.click(px, py)
+                    pyautogui.click(px, py, button=button)
                 return imageCoords
-            def wait_ready(self, *, timeout=False, x=0, y=0):
+            def wait_ready(self, *, timeout=False, x=0, y=0, button='left'):
                 imageCoords = self.automaticGui_props.wait_image(image=lambda: self.automaticGui_props.get_image_position(image_path=self.image_path, confidence=self.confidence, in_app=self.in_app), timeout=timeout)
                 px, py = imageCoords
                 px = px+x
                 py = py+y
-                pyautogui.click(px, py)
+                pyautogui.click(px, py, button=button)
                 return imageCoords
         class GetText:
             def __init__(self, *, automaticGui_props, image_path, confidence, in_app):
